@@ -382,6 +382,7 @@ sub extract_ingredients_from_text($) {
 	return if not defined $product_ref->{ingredients_text};
 
 	my $text = $product_ref->{ingredients_text};
+	$text =~ s/\&quot;/"/g;
 
 	$log->debug("extracting ingredients from text", { text => $text }) if $log->is_debug();
 
@@ -549,11 +550,9 @@ sub extract_ingredients_from_text($) {
 			$origin =~ s/\s+$//;
 		}
 
-		if ($ingredient =~ /\b(bio|organic|halal)\b/i) {
-			$label = $1;
-			$label =~ s/^\s+//;
-			$label =~ s/\s+$//;
-			$ingredient =~ s/\b(bio|organic|halal)\b//i;
+		if ($ingredient =~ /\b(bio|biologique|biologico|organic|halal)\b/i) {
+			$label = canonicalize_taxonomy_tag($product_ref->{lc}, "labels", $1);
+			$ingredient =~ s/\b(bio|biologique|biologico|organic|halal)\b//i;
 			$ingredient =~ s/\s+/ /g;
 		}
 
@@ -752,6 +751,10 @@ fr => [
 
 ],
 
+es => [
+'ingredientes'
+],
+
 );
 
 
@@ -773,6 +776,7 @@ fr => [
 '(a|à) consommer (cuit|rapidement|dans|jusqu)',
 '(a|à) conserver (dans|de|a|à)',
 'apr(e|è)s ouverture',
+'pr(e|é)paration au four',
 
 ],
 
@@ -802,6 +806,10 @@ nl => [
 it => [
 'valori nutrizionali',
 'consigli per la preparazione',
+],
+
+pt => [
+'conservar em local fresco',
 ],
 
 
@@ -903,6 +911,8 @@ sub extract_ingredients_classes_from_text($) {
 	my $path = product_path($product_ref->{code});
 	my $text = $product_ref->{ingredients_text};
 	my $lc = $product_ref->{lc};
+	
+	$text =~ s/\&quot;/"/g;
 
 	# vitamins...
 	# vitamines A, B1, B2, B5, B6, B9, B12, C, D, H, PP et E (lactose, protéines de lait)
@@ -975,7 +985,7 @@ sub extract_ingredients_classes_from_text($) {
 	$text =~ s/(\d+((\,|\.)\d+)?)\s*\%$//g;
 
 
-	$product_ref->{ingredients_text_debug} = $text;
+	#$product_ref->{ingredients_text_debug} = $text;
 
 
 	if ($lc eq 'fr') {
@@ -1213,8 +1223,8 @@ INFO
 		}
 	}
 
-	$product_ref->{ingredients_debug} = clone(\@ingredients);
-	$product_ref->{ingredients_ids_debug} = clone(\@ingredients_ids);
+	#$product_ref->{ingredients_debug} = clone(\@ingredients);
+	#$product_ref->{ingredients_ids_debug} = clone(\@ingredients_ids);
 
 	my $with_sweeteners;
 
@@ -1253,7 +1263,7 @@ INFO
 		$product_ref->{$minerals_tagtype . '_tags'} = [];
 		$product_ref->{$amino_acids_tagtype . '_tags'} = [];
 		$product_ref->{$nucleotides_tagtype . '_tags'} = [];
-		$product_ref->{$vitamins_tagtype . '_tags'} = [];
+		$product_ref->{$other_nutritional_substances_tagtype . '_tags'} = [];
 
 		my $class = $tagtype;
 
@@ -1535,6 +1545,26 @@ INFO
 				delete $product_ref->{$tagtype . '_n'};
 			}
 		}
+		
+		# Delete debug info
+		if (not has_tag($product_ref, "categories", 'en:debug')) {
+			delete $product_ref->{$tagtype};
+		}
+		
+		# Delete empty arrays
+		# -> not active
+		# -> may be dangerous if some apps rely on them existing even if empty
+		
+		if (0) {
+			foreach my $array ($tagtype . '_tags', $tagtype . '_original_tags',
+				$vitamins_tagtype . '_tags', $minerals_tagtype . '_tags',
+				$amino_acids_tagtype . '_tags', $nucleotides_tagtype . '_tags',
+				$other_nutritional_substances_tagtype . '_tags') {
+				if ((defined $product_ref->{$array}) and ((scalar @{$product_ref->{$array}}) == 0)) {
+					delete $product_ref->{$array};
+				}
+			}
+		}
 	}
 
 
@@ -1602,12 +1632,23 @@ INFO
 		else {
 			$product_ref->{$tagtype . '_n'} = scalar @{$product_ref->{$tagtype . '_tags'}};
 		}
+		
+		# Delete empty arrays
+		# -> not active
+		# -> may be dangerous if some apps rely on them existing even if empty		
+		
+		if (0) {
+			if ((defined $product_ref->{$tagtype . '_tags'}) and ((scalar @{$product_ref->{$tagtype . '_tags'}}) == 0)) {
+					delete $product_ref->{$tagtype . '_tags'};
+			}
+		}
 	}
 
-	for (my $i = 0; $i < (scalar @{$product_ref->{additives_old_tags}}); $i++) {
-		$product_ref->{additives_old_tags}[$i] = 'en:' . $product_ref->{additives_old_tags}[$i];
+	if (defined $product_ref->{additives_old_tags}) {
+		for (my $i = 0; $i < (scalar @{$product_ref->{additives_old_tags}}); $i++) {
+			$product_ref->{additives_old_tags}[$i] = 'en:' . $product_ref->{additives_old_tags}[$i];
+		}
 	}
-
 
 	# keep the old additives for France until we can fix the new taxonomy matching to support all special cases
 	# e.g. lecithine de soja
@@ -1622,13 +1663,11 @@ INFO
 
 	# check if we have a previous or a next version and compute differences
 
-	$product_ref->{$field . "_debug_tags"} = [];
-
-
-
 	# previous version
 
 	if (exists $loaded_taxonomies{$field . "_prev"}) {
+	
+		(defined $product_ref->{$field . "_debug_tags"}) or $product_ref->{$field . "_debug_tags"} = [];
 
 		# compute differences
 		foreach my $tag (@{$product_ref->{$field . "_tags"}}) {
@@ -1654,6 +1693,8 @@ INFO
 	# next version
 
 	if (exists $loaded_taxonomies{$field . "_next"}) {
+	
+		(defined $product_ref->{$field . "_debug_tags"}) or $product_ref->{$field . "_debug_tags"} = [];
 
 		# compute differences
 		foreach my $tag (@{$product_ref->{$field . "_tags"}}) {
@@ -1685,12 +1726,14 @@ INFO
 
 
 	delete $product_ref->{with_sweeteners};
-	foreach my $additive (@{$product_ref->{'additives_tags'}}) {
-		my $e = $additive;
-		$e =~ s/\D//g;
-		if (($e >= 950) and ($e <= 968)) {
-			$product_ref->{with_sweeteners} = 1;
-			last;
+	if (defined $product_ref->{'additives_tags'}) {
+		foreach my $additive (@{$product_ref->{'additives_tags'}}) {
+			my $e = $additive;
+			$e =~ s/\D//g;
+			if (($e >= 950) and ($e <= 968)) {
+				$product_ref->{with_sweeteners} = 1;
+				last;
+			}
 		}
 	}
 }
@@ -1705,7 +1748,7 @@ sub replace_allergen($$$$) {
 	my $before = shift;
 
 	my $field = "allergens";
-	if ($before =~ /\b(peut contenir|qui utilise aussi|traces|may contain)\b/i) {
+	if ($before =~ /\b(peut contenir|qui utilise aussi|traces|may contain|puo contenere|tracce)\b/i) {
 		$field = "traces";
 	}
 
@@ -1728,7 +1771,7 @@ sub replace_allergen_in_caps($$$$) {
 	my $before = shift;
 
 	my $field = "allergens";
-	if ($before =~ /\b(peut contenir|qui utilise aussi|traces|trace|may contain)\b/i) {
+	if ($before =~ /\b(peut contenir|qui utilise aussi|traces|trace|may contain|puo contenere|tracce)\b/i) {
 		$field = "traces";
 	}
 
@@ -1822,6 +1865,7 @@ sub detect_allergens_from_text($) {
 		foreach my $language (keys %{$product_ref->{languages_codes}}) {
 
 			my $text = $product_ref->{"ingredients_text_" . $language };
+			$text =~ s/\&quot;/"/g;
 
 			next if not defined $text;
 
